@@ -4529,8 +4529,14 @@ def platre(ex, ey, ep, D, eq=None):
     fe : ndarray, optional
         Equivalent nodal forces, shape (12, 1), if eq is not None.
     """
-    Lx = (ex[2]-ex[0]).astype(float)
-    Ly = (ey[2]-ey[0]).astype(float)
+    ex = np.asarray(ex, dtype=float).reshape(-1)
+    ey = np.asarray(ey, dtype=float).reshape(-1)
+    ep = np.asarray(ep, dtype=float).reshape(-1)
+    D = np.asarray(D, dtype=float)
+    dx = ex[2] - ex[0]
+    dy = ey[2] - ey[0]
+    Lx = abs(dx)
+    Ly = abs(dy)
     t = ep[0]
 
     D = t**3/12.*D
@@ -4584,18 +4590,93 @@ def platre(ex, ey, ep, D, eq=None):
     Keq[11, 11] = C14
     Keq = Keq.T+Keq-np.diag(np.diag(Keq))
 
-    if eq != None:
-        q = eq
+    if eq is not None:
+        q = float(np.asarray(eq).reshape(-1)[0])
         R1 = q*Lx*Ly/4
         R2 = q*Lx*Ly**2/24
         R3 = q*Ly*Lx**2/24
 
-        feq = np.matrix([R1, R2, -R3, R1, R2, R3, R1, -R2, R3, R1, -R2, -R3])
+    # MATLAB reorders the stiffness matrix and load vector for reversed
+    # rectangular node orderings.
+    node_order = [0, 1, 2, 3]
+    load_signs = [1, 1, -1, 1, 1, 1, 1, -1, 1, 1, -1, -1]
+    if dx < 0 and dy > 0:
+        node_order = [1, 2, 3, 0]
+        load_signs = [1, 1, 1, 1, -1, 1, 1, -1, -1, 1, 1, -1]
+    elif dx < 0 and dy < 0:
+        node_order = [2, 3, 0, 1]
+        load_signs = [1, -1, 1, 1, -1, -1, 1, 1, -1, 1, 1, 1]
+    elif dx > 0 and dy < 0:
+        node_order = [3, 0, 1, 2]
+        load_signs = [1, -1, -1, 1, 1, -1, 1, 1, 1, 1, -1, 1]
 
-    if eq != None:
+    if node_order != [0, 1, 2, 3]:
+        indices = np.asarray([3*node + dof for node in node_order for dof in range(3)])
+        Keq = np.matrix(np.asarray(Keq)[np.ix_(indices, indices)])
+
+    if eq is not None:
+        feq = np.matrix(np.asarray(load_signs) * np.asarray(
+            [R1, R2, R3, R1, R2, R3, R1, R2, R3, R1, R2, R3])).T
         return Keq, feq
-    else:
-        return Keq
+    return Keq
+
+
+def platrs(ex, ey, ep, D, ed):
+    """Calculate plate resultants and curvatures for a rectangular element.
+
+    Parameters use CALFEM's rectangular plate ordering and the same inputs as
+    MATLAB's ``platrs``. ``ed`` contains the 12 element displacement values.
+
+    Returns
+    -------
+    es : ndarray, shape (1, 5)
+        Bending and twisting moments followed by the two shear forces.
+    et : ndarray, shape (1, 3)
+        Curvatures in the x, y, and twisting directions.
+    """
+    ex = np.asarray(ex, dtype=float).reshape(-1)
+    ey = np.asarray(ey, dtype=float).reshape(-1)
+    ep = np.asarray(ep, dtype=float).reshape(-1)
+    D = np.asarray(D, dtype=float)
+    ed = np.asarray(ed, dtype=float).reshape(4, 3)
+
+    dx = ex[2] - ex[0]
+    dy = ey[2] - ey[0]
+    Lx = abs(dx)
+    Ly = abs(dy)
+    Db = ep[0]**3/12.0 * D
+
+    if dx < 0 and dy > 0:
+        ed = ed[[3, 0, 1, 2]]
+    elif dx < 0 and dy < 0:
+        ed = ed[[2, 3, 0, 1]]
+    elif dx > 0 and dy < 0:
+        ed = ed[[1, 2, 3, 0]]
+    ed = ed.reshape(12)
+
+    A1 = Db[1, 1]/(2*Ly)
+    A2 = Db[0, 0]/(2*Lx)
+    A3 = Db[0, 1]/(2*Ly)
+    A4 = Db[0, 1]/(2*Lx)
+    A5 = Db[2, 2]/(2*Ly)
+    A6 = Db[2, 2]/(2*Lx)
+    A7 = 4*Db[2, 2]/(Lx*Ly)
+    B1 = 6*Db[1, 1]/Ly**3
+    B2 = 6*Db[0, 0]/Lx**3
+    B3 = -3*Db[1, 1]/Ly**2
+    B4 = 3*Db[0, 0]/Lx**2
+    B5 = Db[0, 1]/(Lx*Ly)
+
+    ed1, ed2, ed3, ed4, ed5, ed6, ed7, ed8, ed9, ed10, ed11, ed12 = ed
+    mx = A3*(-ed2-ed5+ed8+ed11) + A2*(ed3-ed6-ed9+ed12)
+    my = A1*(-ed2-ed5+ed8+ed11) + A4*(ed3-ed6-ed9+ed12)
+    mxy = A6*(ed2-ed5-ed8+ed11) + A5*(-ed3-ed6+ed9+ed12) + A7*(ed1-ed4+ed7-ed10)
+    vx = B5*(-ed2+ed5-ed8+ed11) + B4*(ed3+ed6+ed9+ed12) + B2*(-ed1+ed4+ed7-ed10)
+    vy = B3*(ed2+ed5+ed8+ed11) + B5*(ed3-ed6+ed9-ed12) + B1*(-ed1-ed4+ed7+ed10)
+
+    es = np.asarray([[mx, my, mxy, vx, vy]])
+    et = -np.linalg.solve(Db, np.asarray([mx, my, mxy])).reshape(1, 3)
+    return es, et
 
 
 def planqe(ex, ey, ep, D, eq=None):
