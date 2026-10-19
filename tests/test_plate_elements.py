@@ -91,7 +91,7 @@ def test_platrs_returns_resultants_and_curvatures(module):
     np.testing.assert_allclose(et, expected_et, rtol=1e-12, atol=1e-12)
 
     Db = ep[0]**3/12 * np.asarray(Dplate)
-    np.testing.assert_allclose(et, -np.linalg.solve(Db, es[0]).reshape(1, 3))
+    np.testing.assert_allclose(et, -np.linalg.solve(Db, es[0, :3]).reshape(1, 3))
 
 
 @pytest.mark.parametrize("module", MODULES)
